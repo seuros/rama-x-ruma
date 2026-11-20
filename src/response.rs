@@ -87,7 +87,7 @@ impl<T> MatrixResponse<T> {
 ///
 /// Both arms render as HTTP responses, so handlers can return it directly;
 /// [`matrix_result`] converts one explicitly. Server error types convert
-/// into [`MatrixRejection`] through `From`, so `?` works on them.
+/// into [`MatrixRejection`](crate::MatrixRejection) through `From`, so `?` works on them.
 ///
 /// # Example
 ///
