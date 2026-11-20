@@ -33,6 +33,7 @@ use rama::error::BoxError;
 use rama::http::body::CollectErrorKind;
 use rama::http::body::util::{BodyExt, LengthLimitError, Limited};
 use rama::http::convert::hyperium::{TryIntoHyperiumHttp, TryIntoRamaHttp};
+use rama::http::header::AUTHORIZATION;
 use rama::http::{Body, Request, Response, StreamingBody};
 use ruma::api::client::discovery::get_supported_versions;
 use ruma::api::{
@@ -192,6 +193,34 @@ impl<S> MatrixClient<S> {
     }
 }
 
+impl<S> MatrixClient<S> {
+    /// `request` as the rama request the service receives.
+    fn build_request<R>(&self, request: R) -> Result<Request<Body>, ClientError<R::EndpointError>>
+    where
+        R: OutgoingRequest,
+        R::Authentication: OutgoingAuth,
+        R::PathBuilder: OutgoingPath,
+    {
+        let config = &*self.config;
+        let http_request = request
+            .try_into_http_request::<BytesMut>(
+                &config.homeserver,
+                R::Authentication::input(&config.credentials),
+                R::PathBuilder::input(Cow::Borrowed(&config.versions)),
+            )
+            .map_err(ClientError::IntoHttp)?;
+        let mut rama_request = http_request
+            .map(|body| Body::from(body.freeze()))
+            .try_into_rama_http()
+            .map_err(|e| ClientError::Convert(e.into()))?;
+        // keep the token out of header-logging layers
+        if let Some(value) = rama_request.headers_mut().get_mut(AUTHORIZATION) {
+            value.set_sensitive(true);
+        }
+        Ok(rama_request)
+    }
+}
+
 impl<S, B> MatrixClient<S>
 where
     S: Service<Request<Body>, Output = Response<B>>,
@@ -242,18 +271,7 @@ where
         R::Authentication: OutgoingAuth,
         R::PathBuilder: OutgoingPath,
     {
-        let config = &*self.config;
-        let http_request = request
-            .try_into_http_request::<BytesMut>(
-                &config.homeserver,
-                R::Authentication::input(&config.credentials),
-                R::PathBuilder::input(Cow::Borrowed(&config.versions)),
-            )
-            .map_err(ClientError::IntoHttp)?;
-        let rama_request = http_request
-            .map(|body| Body::from(body.freeze()))
-            .try_into_rama_http()
-            .map_err(|e| ClientError::Convert(e.into()))?;
+        let rama_request = self.build_request(request)?;
 
         let exchange = self.exchange(rama_request);
         let (parts, bytes) = match timeout {

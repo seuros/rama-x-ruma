@@ -1,4 +1,8 @@
+use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use http::StatusCode;
 
 use ruma::api::EndpointError;
 use ruma::api::auth_scheme::{AppserviceTokenOptional, SendAccessToken};
@@ -17,6 +21,42 @@ fn server_error(status: u16, headers: &[(&str, &str)], body: &str) -> ClientErro
     ClientError::Response(FromHttpResponseError::Server(
         RumaError::from_http_response(response),
     ))
+}
+
+/// MOCKED: answers every request with one canned response and records
+/// whether its Authorization header was marked sensitive.
+#[derive(Clone)]
+struct Canned {
+    status: StatusCode,
+    body: &'static str,
+    authorization_sensitive: Arc<Mutex<Option<bool>>>,
+}
+
+impl Canned {
+    fn new(status: StatusCode, body: &'static str) -> Self {
+        Self {
+            status,
+            body,
+            authorization_sensitive: Arc::default(),
+        }
+    }
+}
+
+impl Service<Request<Body>> for Canned {
+    type Output = Response<Body>;
+    type Error = Infallible;
+
+    async fn serve(&self, request: Request<Body>) -> Result<Self::Output, Self::Error> {
+        let sensitive = request
+            .headers()
+            .get(AUTHORIZATION)
+            .map(|value| value.is_sensitive());
+        *self.authorization_sensitive.lock().expect("lock") = sensitive;
+        let mut response = Response::new(Body::from(self.body));
+        *response.status_mut() =
+            rama::http::StatusCode::from_u16(self.status.as_u16()).expect("valid status");
+        Ok(response)
+    }
 }
 
 #[test]
@@ -63,21 +103,32 @@ fn user_token_skips_appservice_optional_endpoints() {
 #[test]
 fn builds_v3_path_with_bearer_token() {
     let client = MatrixClient::new((), "https://hs").with_access_token("tok");
-    let config = &*client.config;
-    let request = whoami::Request::new()
-        .try_into_http_request::<Vec<u8>>(
-            &config.homeserver,
-            <whoami::Request as ruma::api::Metadata>::Authentication::input(&config.credentials),
-            <whoami::Request as ruma::api::Metadata>::PathBuilder::input(Cow::Borrowed(
-                &config.versions,
-            )),
-        )
+    let request = client
+        .build_request(whoami::Request::new())
         .expect("request builds");
     assert_eq!(
         request.uri().to_string(),
         "https://hs/_matrix/client/v3/account/whoami"
     );
-    assert_eq!(request.headers()["authorization"], "Bearer tok");
+    let authorization = &request.headers()[AUTHORIZATION];
+    assert_eq!(authorization, "Bearer tok");
+    // header-logging layers must not print the token
+    assert!(authorization.is_sensitive());
+}
+
+#[tokio::test]
+async fn the_service_receives_a_sensitive_authorization_header() {
+    let service = Canned::new(
+        StatusCode::OK,
+        r#"{"user_id":"@alice:example.org","is_guest":false}"#,
+    );
+    let client = MatrixClient::new(service.clone(), "https://hs").with_access_token("tok");
+    let me = client.send(whoami::Request::new()).await.expect("whoami");
+    assert_eq!(me.user_id, "@alice:example.org");
+    assert_eq!(
+        *service.authorization_sensitive.lock().expect("lock"),
+        Some(true)
+    );
 }
 
 #[test]
