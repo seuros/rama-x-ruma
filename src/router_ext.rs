@@ -181,15 +181,16 @@ const STATE_KEY_SEGMENT: &str = "/{state_key}";
 /// Every router path serving a Ruma path template.
 ///
 /// A trailing `{stateKey}` may be the empty string, which clients send as
-/// `.../state/{eventType}` or `.../state/{eventType}/`; an empty segment
-/// never matches a placeholder, so both spellings get their own route and
-/// the extractor fills in the empty key.
+/// `.../state/{eventType}` or `.../state/{eventType}/`. An empty segment
+/// never matches a placeholder and rama trims a literal trailing slash off
+/// route patterns, so one extra route ending in `/?` (optional trailing
+/// slash) takes both spellings and the extractor fills in the empty key.
 pub fn route_paths(ruma_path: &str) -> Vec<String> {
     let path = convert_ruma_path_to_rama(ruma_path);
     match path.strip_suffix(STATE_KEY_SEGMENT) {
         Some(prefix) => {
-            let (bare, slashed) = (prefix.to_owned(), format!("{prefix}/"));
-            vec![path, bare, slashed]
+            let empty_key = format!("{prefix}/?");
+            vec![path, empty_key]
         }
         None => vec![path],
     }

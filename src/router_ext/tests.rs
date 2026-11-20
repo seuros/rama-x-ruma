@@ -74,8 +74,7 @@ fn trailing_state_key_also_routes_empty_key_spellings() {
             "/_matrix/client/v3/rooms/{room_id}/state/{event_type}/{state_key}",
             &[
                 "/_matrix/client/v3/rooms/{room_id}/state/{event_type}/{state_key}",
-                "/_matrix/client/v3/rooms/{room_id}/state/{event_type}",
-                "/_matrix/client/v3/rooms/{room_id}/state/{event_type}/",
+                "/_matrix/client/v3/rooms/{room_id}/state/{event_type}/?",
             ],
         ),
         (

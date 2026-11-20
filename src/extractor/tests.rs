@@ -139,6 +139,11 @@ async fn multi_segment_path_params_reach_ruma_in_template_order() {
             "/_matrix/client/v3/rooms/!room:example.org/state/m.room.member",
             "",
         ),
+        // the spec's spelling of the empty key, which clients send
+        (
+            "/_matrix/client/v3/rooms/!room:example.org/state/m.room.member/",
+            "",
+        ),
     ];
     for (target, state_key) in cases {
         let (status, body) = serve(&svc, "GET", target, Some("t")).await;
@@ -153,6 +158,44 @@ async fn multi_segment_path_params_reach_ruma_in_template_order() {
     let (status, body) = serve(&svc, "GET", cases[0].0, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["errcode"], "M_MISSING_TOKEN");
+}
+
+/// `PUT .../state/{eventType}/` is the spec's empty state key; ruma's
+/// `send_state_event` gets `""` and the body, as for the slashless form.
+#[tokio::test]
+async fn empty_state_key_put_with_trailing_slash_routes() {
+    use ruma::api::client::state::send_state_event::v3 as send_state;
+
+    async fn handler(req: Matrix<send_state::Request, Alice>) -> impl IntoResponse {
+        let body = serde_json::json!({
+            "event_type": req.event_type.to_string(),
+            "state_key": req.state_key,
+            "content": req.body.body.json().get(),
+        });
+        rama::http::service::web::response::Json(body)
+    }
+
+    let router = Router::new().with_matrix_endpoint::<send_state::Request, _, _>(handler);
+    let svc = StateLayer::new(std::sync::Arc::new(Alice)).into_layer(router);
+
+    for target in [
+        "/_matrix/client/v3/rooms/!r:x/state/m.room.name/",
+        "/_matrix/client/v3/rooms/!r:x/state/m.room.name",
+    ] {
+        let request = Request::builder()
+            .method("PUT")
+            .uri(target)
+            .header("authorization", "Bearer t")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"Lobby"}"#))
+            .expect("request");
+        let response = svc.serve(request).await.expect("served");
+        assert_eq!(response.status(), StatusCode::OK, "{target}");
+        let body: serde_json::Value = response.try_into_json().await.expect("json");
+        assert_eq!(body["event_type"], "m.room.name", "{target}");
+        assert_eq!(body["state_key"], "", "{target}");
+        assert_eq!(body["content"], r#"{"name":"Lobby"}"#, "{target}");
+    }
 }
 
 /// Routes without a ruma type take multi-segment paths as a named struct
