@@ -55,3 +55,7 @@ rama = { version = "0.4.0", features = ["http-full"] }
 ruma = { version = "0.17.2", features = ["federation-api-s"] }
 tokio = { version = "1.42", features = ["full"] }
 
+
+[[test]]
+name = "client_roundtrip"
+required-features = ["client"]
