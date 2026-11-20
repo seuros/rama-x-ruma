@@ -14,7 +14,9 @@
 * **client:** `ClientError<E>` keeps the answer's HTTP status and ruma's
   `FromHttpResponseError`, and reads `status()`, `errcode()`, `error_kind()`,
   `retry_after()` and `is_retryable()` from them, for ruma's `Error` and
-  `UiaaResponse` (a UIA challenge still reports its 401).
+  `UiaaResponse` (a UIA challenge still reports its 401). `retry_after()`
+  falls back to the `Retry-After` header (seconds or HTTP date) when the
+  body carries no Matrix rate limit, as a reverse proxy's 429 or 503 does.
 * **examples:** `whoami_client`.
 
 ### ⚠ BREAKING CHANGES

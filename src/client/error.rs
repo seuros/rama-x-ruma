@@ -39,6 +39,9 @@ pub enum ClientError<E = MatrixError> {
     Response {
         /// The answer's HTTP status.
         status: http::StatusCode,
+        /// The answer's `Retry-After` header (seconds or HTTP date), whatever
+        /// its body; a proxy's 429 or 503 carries no Matrix error.
+        retry_after_header: Option<RetryAfter>,
         /// ruma's reading of the answer.
         error: FromHttpResponseError<E>,
     },
@@ -82,21 +85,26 @@ impl<E: MatrixErrorBody> ClientError<E> {
         self.error_kind().map(ErrorKind::errcode)
     }
 
-    /// How long a rate-limited (`M_LIMIT_EXCEEDED`) request should wait,
-    /// from `Retry-After` or `retry_after_ms`; a past date is zero.
+    /// How long to wait before retrying; a past date is zero.
+    ///
+    /// An `M_LIMIT_EXCEEDED` body's value comes first (ruma prefers its
+    /// `Retry-After` header over `retry_after_ms`); otherwise any answer's
+    /// `Retry-After` header, such as a proxy's 429 or 503 with an HTML body.
     pub fn retry_after(&self) -> Option<Duration> {
-        match self.error_kind()? {
-            ErrorKind::LimitExceeded(LimitExceededErrorData {
+        let from_body = match self.error_kind() {
+            Some(ErrorKind::LimitExceeded(LimitExceededErrorData {
                 retry_after: Some(retry_after),
                 ..
-            }) => Some(match retry_after {
-                RetryAfter::Delay(delay) => *delay,
-                RetryAfter::DateTime(at) => at
-                    .duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO),
-            }),
+            })) => Some(retry_after),
             _ => None,
-        }
+        };
+        let from_header = match self {
+            Self::Response {
+                retry_after_header, ..
+            } => retry_after_header.as_ref(),
+            _ => None,
+        };
+        from_body.or(from_header).map(delay)
     }
 
     /// Transport trouble, timeouts, rate limits and 5xx may pass; anything
@@ -107,6 +115,7 @@ impl<E: MatrixErrorBody> ClientError<E> {
             Self::Response {
                 status,
                 error: FromHttpResponseError::Server(_),
+                ..
             } => {
                 status.is_server_error()
                     || *status == http::StatusCode::TOO_MANY_REQUESTS
@@ -114,6 +123,29 @@ impl<E: MatrixErrorBody> ClientError<E> {
             }
             _ => false,
         }
+    }
+}
+
+/// A `Retry-After` header: delay-seconds or an HTTP date. Seconds beyond
+/// `u64` cap at the maximum; anything else malformed is no hint at all.
+pub(super) fn parse_retry_after(value: &http::HeaderValue) -> Option<RetryAfter> {
+    match RetryAfter::try_from(value) {
+        Ok(retry_after) => Some(retry_after),
+        Err(_) => {
+            let digits = value.as_bytes();
+            (!digits.is_empty() && digits.iter().all(u8::is_ascii_digit))
+                .then(|| RetryAfter::Delay(Duration::from_secs(u64::MAX)))
+        }
+    }
+}
+
+/// The wait `retry_after` asks for, from now.
+fn delay(retry_after: &RetryAfter) -> Duration {
+    match retry_after {
+        RetryAfter::Delay(delay) => *delay,
+        RetryAfter::DateTime(at) => at
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
     }
 }
 

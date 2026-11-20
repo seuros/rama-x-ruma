@@ -8,7 +8,7 @@ use ruma::api::EndpointError;
 use ruma::api::auth_scheme::{AppserviceTokenOptional, SendAccessToken};
 use ruma::api::client::account::whoami::v3 as whoami;
 use ruma::api::client::uiaa::{UiaaInfo, UiaaResponse};
-use ruma::api::error::{Error as RumaError, ErrorCode, FromHttpResponseError};
+use ruma::api::error::{Error as RumaError, ErrorCode, FromHttpResponseError, RetryAfter};
 
 use super::*;
 
@@ -20,6 +20,10 @@ fn server_error(status: u16, headers: &[(&str, &str)], body: &str) -> ClientErro
     let response = builder.body(body.as_bytes()).expect("valid response");
     ClientError::Response {
         status: response.status(),
+        retry_after_header: response
+            .headers()
+            .get(http::header::RETRY_AFTER)
+            .and_then(error::parse_retry_after),
         error: FromHttpResponseError::Server(RumaError::from_http_response(response)),
     }
 }
@@ -30,6 +34,8 @@ fn server_error(status: u16, headers: &[(&str, &str)], body: &str) -> ClientErro
 struct Canned {
     status: StatusCode,
     body: &'static str,
+    content_type: &'static str,
+    retry_after: Option<String>,
     authorization_sensitive: Arc<Mutex<Option<bool>>>,
 }
 
@@ -38,7 +44,18 @@ impl Canned {
         Self {
             status,
             body,
+            content_type: "application/json",
+            retry_after: None,
             authorization_sensitive: Arc::default(),
+        }
+    }
+
+    /// A reverse proxy's HTML page with a `Retry-After` header.
+    fn proxy(status: StatusCode, retry_after: &str) -> Self {
+        Self {
+            content_type: "text/html",
+            retry_after: Some(retry_after.to_owned()),
+            ..Self::new(status, PROXY_PAGE)
         }
     }
 }
@@ -56,6 +73,16 @@ impl Service<Request<Body>> for Canned {
         let mut response = Response::new(Body::from(self.body));
         *response.status_mut() =
             rama::http::StatusCode::from_u16(self.status.as_u16()).expect("valid status");
+        response.headers_mut().insert(
+            rama::http::header::CONTENT_TYPE,
+            rama::http::HeaderValue::from_static(self.content_type),
+        );
+        if let Some(value) = &self.retry_after {
+            response.headers_mut().insert(
+                rama::http::header::RETRY_AFTER,
+                rama::http::HeaderValue::from_str(value).expect("valid header"),
+            );
+        }
         Ok(response)
     }
 }
@@ -198,6 +225,7 @@ async fn uiaa_challenge_keeps_its_status() {
 fn uiaa_auth_response_has_no_matrix_error() {
     let error: ClientError<UiaaResponse> = ClientError::Response {
         status: StatusCode::UNAUTHORIZED,
+        retry_after_header: None,
         error: FromHttpResponseError::Server(UiaaResponse::AuthResponse(UiaaInfo::new(Vec::new()))),
     };
     assert!(error.server_error().is_some());
@@ -225,4 +253,59 @@ async fn unparseable_success_keeps_its_status() {
     );
     assert_eq!(error.status(), Some(StatusCode::OK));
     assert!(!error.is_retryable());
+}
+
+const PROXY_PAGE: &str = "<html><body>502 Bad Gateway</body></html>";
+
+async fn proxy_answer(status: StatusCode, retry_after: &str) -> ClientError {
+    let client = MatrixClient::new(Canned::proxy(status, retry_after), "https://hs")
+        .with_access_token("tok");
+    client
+        .send(whoami::Request::new())
+        .await
+        .expect_err("proxy answer")
+}
+
+#[tokio::test]
+async fn proxy_rate_limit_without_a_matrix_body_keeps_retry_after() {
+    let error = proxy_answer(StatusCode::TOO_MANY_REQUESTS, "60").await;
+    assert!(error.errcode().is_none(), "{error:?}");
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(60)));
+    assert!(error.is_retryable());
+
+    let error = proxy_answer(StatusCode::SERVICE_UNAVAILABLE, "5").await;
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(5)));
+    assert!(error.is_retryable());
+}
+
+#[tokio::test]
+async fn proxy_retry_after_http_date() {
+    use std::time::SystemTime;
+
+    let at = SystemTime::now() + Duration::from_secs(120);
+    let date = http::HeaderValue::try_from(&RetryAfter::DateTime(at)).expect("http date");
+    let error = proxy_answer(StatusCode::TOO_MANY_REQUESTS, date.to_str().expect("ascii")).await;
+    // HTTP dates have whole seconds
+    let wait = error.retry_after().expect("retry_after");
+    assert!(
+        wait > Duration::from_secs(100) && wait <= Duration::from_secs(120),
+        "{wait:?}"
+    );
+
+    let past = proxy_answer(
+        StatusCode::TOO_MANY_REQUESTS,
+        "Wed, 21 Oct 2015 07:28:00 GMT",
+    )
+    .await;
+    assert_eq!(past.retry_after(), Some(Duration::ZERO));
+}
+
+#[tokio::test]
+async fn proxy_retry_after_overflow_caps_and_garbage_is_ignored() {
+    let huge = proxy_answer(StatusCode::TOO_MANY_REQUESTS, "99999999999999999999999").await;
+    assert_eq!(huge.retry_after(), Some(Duration::from_secs(u64::MAX)));
+
+    let garbage = proxy_answer(StatusCode::TOO_MANY_REQUESTS, "soon").await;
+    assert_eq!(garbage.retry_after(), None);
+    assert!(garbage.is_retryable());
 }

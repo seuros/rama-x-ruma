@@ -285,8 +285,17 @@ where
             .try_into_hyperium_http()
             .map_err(|e| ClientError::Convert(e.into()))?;
         let status = http_response.status();
-        R::IncomingResponse::try_from_http_response(http_response.map(|()| bytes.as_ref()))
-            .map_err(|error| ClientError::Response { status, error })
+        let retry_after_header = http_response
+            .headers()
+            .get(http::header::RETRY_AFTER)
+            .and_then(error::parse_retry_after);
+        R::IncomingResponse::try_from_http_response(http_response.map(|()| bytes.as_ref())).map_err(
+            |error| ClientError::Response {
+                status,
+                retry_after_header,
+                error,
+            },
+        )
     }
 
     async fn exchange<E>(
