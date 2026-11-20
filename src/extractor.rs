@@ -15,6 +15,7 @@ use rama::http::{Request, matcher::UriParams, service::web::extract::FromRequest
 use rama::telemetry::tracing::{debug, warn};
 use ruma::{
     OwnedDeviceId, OwnedServerName, OwnedUserId,
+    api::error::{DeserializationError, FromHttpRequestError},
     api::path_builder::PathBuilder,
     api::{IncomingRequest, IncomingRequestExt},
 };
@@ -189,16 +190,19 @@ where
 
         let path_args: Vec<&str> = path_args.iter().map(String::as_str).collect();
         let request = http_request.map(|()| body_bytes.as_ref());
-        let body = T::try_from_http_request(request, &path_args).map_err(|e| {
-            warn!("Failed to parse Matrix request: {:?}", e);
-            MatrixRejection::from_ruma_error(e)
-        })?;
+        let parsed = T::try_from_http_request(request, &path_args);
 
+        // a non-UTF-8 body is never JSON, whether ruma choked on it or not
         if let Some((err, probe)) = not_utf8
-            && T::try_from_http_request(probe, &path_args).is_err()
+            && rejects_non_json_body(T::try_from_http_request(probe, &path_args))
         {
             return Err(MatrixRejection::not_json(err.to_string()));
         }
+
+        let body = parsed.map_err(|e| {
+            warn!("Failed to parse Matrix request: {:?}", e);
+            MatrixRejection::from_ruma_error(e)
+        })?;
 
         Ok(Matrix {
             body,
@@ -215,6 +219,17 @@ where
 /// Not UTF-8 and not JSON: only an endpoint that never parses its body as
 /// JSON accepts it.
 const NOT_JSON_PROBE: &[u8] = b"\xff";
+
+/// Whether the probe failed on its body as JSON, rather than on the query,
+/// path or headers it shares with the real request.
+fn rejects_non_json_body<T>(probe: Result<T, FromHttpRequestError>) -> bool {
+    matches!(
+        probe,
+        Err(FromHttpRequestError::Deserialization(
+            DeserializationError::Json(_)
+        ))
+    )
+}
 
 /// Path arguments in the order ruma's `try_from_http_request` expects:
 /// the order of the placeholders in the endpoint's first path template

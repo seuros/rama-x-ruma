@@ -250,6 +250,24 @@ async fn non_utf8_json_body_is_not_json_but_raw_uploads_pass() {
     let body: serde_json::Value = response.try_into_json().await.expect("json");
     assert_eq!(body["errcode"], "M_NOT_JSON");
 
+    // the wrong shape too, yet the bytes are what is wrong first
+    let response = svc
+        .serve(put(b"{\"displayname\":123,\"ignored\":\"\xff\"}"))
+        .await
+        .expect("served");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.try_into_json().await.expect("json");
+    assert_eq!(body["errcode"], "M_NOT_JSON");
+
+    // UTF-8 of the wrong shape stays M_BAD_JSON
+    let response = svc
+        .serve(put(b"{\"displayname\":123}"))
+        .await
+        .expect("served");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.try_into_json().await.expect("json");
+    assert_eq!(body["errcode"], "M_BAD_JSON");
+
     let response = svc
         .serve(put(b"{\"displayname\":\"Alice\"}"))
         .await
