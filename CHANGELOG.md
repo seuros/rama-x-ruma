@@ -9,14 +9,28 @@
   `client` feature. Tokens follow each endpoint's auth scheme (user or
   appservice `Credentials`), paths follow the homeserver's
   `SupportedVersions`, response bodies are read under a size limit, and
-  requests take a default or per-call timeout.
-* **client:** `ClientError<E>` keeps ruma's `FromHttpResponseError` and reads
-  `errcode()`, `error_kind()`, `status()`, `retry_after()` and
-  `is_retryable()` from it, for ruma's `Error` and `UiaaResponse`.
+  requests take a default or per-call timeout. The `Authorization` header
+  is marked sensitive so header-logging layers never print the token.
+* **client:** `ClientError<E>` keeps the answer's HTTP status and ruma's
+  `FromHttpResponseError`, and reads `status()`, `errcode()`, `error_kind()`,
+  `retry_after()` and `is_retryable()` from them, for ruma's `Error` and
+  `UiaaResponse` (a UIA challenge still reports its 401).
 * **examples:** `whoami_client`.
+
+### ⚠ BREAKING CHANGES
+
+* **rejection:** a request body that does not parse as JSON (or is not
+  UTF-8) now answers `M_NOT_JSON`, as the spec requires; `M_BAD_JSON` stays
+  for JSON of the wrong shape. `From<serde_json::Error>` follows the same
+  split, and `MatrixRejection` has a `NotJson` variant.
+* **router:** `route_paths` returns two paths for a trailing state key, the
+  second ending in `/?`, instead of three.
 
 ### Bug Fixes
 
+* **router:** `PUT`/`GET .../state/{eventType}/`, the spec's spelling of the
+  empty state key, routes instead of answering 404 (rama trims a literal
+  trailing slash off route patterns).
 * **docs:** the `MatrixRejection` link on `MatrixResult` resolves.
 
 ## 0.1.0 (2026-11-05)
