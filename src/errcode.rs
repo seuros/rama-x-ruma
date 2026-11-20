@@ -12,6 +12,7 @@ pub const LIMIT_EXCEEDED: &str = "M_LIMIT_EXCEEDED";
 pub const MISSING_PARAM: &str = "M_MISSING_PARAM";
 pub const MISSING_TOKEN: &str = "M_MISSING_TOKEN";
 pub const NOT_FOUND: &str = "M_NOT_FOUND";
+pub const NOT_JSON: &str = "M_NOT_JSON";
 pub const NOT_YET_UPLOADED: &str = "M_NOT_YET_UPLOADED";
 pub const TOO_LARGE: &str = "M_TOO_LARGE";
 pub const UNAUTHORIZED: &str = "M_UNAUTHORIZED";

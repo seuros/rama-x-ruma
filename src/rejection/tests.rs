@@ -378,6 +378,12 @@ async fn rejection_mapping_table() {
             json!({"error": "Failed to read request body: eof"}),
         ),
         (
+            MatrixRejection::not_json("x"),
+            StatusCode::BAD_REQUEST,
+            "M_NOT_JSON",
+            json!({"error": "Content not JSON: x"}),
+        ),
+        (
             MatrixRejection::bad_json("x"),
             StatusCode::BAD_REQUEST,
             "M_BAD_JSON",
@@ -513,4 +519,39 @@ fn ruma_parse_errors_map_to_client_errcodes() {
     let err = messages::Request::try_from_http_request(request, &["not a room id"])
         .expect_err("bad room id");
     assert_eq!(MatrixRejection::from(err).errcode(), "M_INVALID_PARAM");
+}
+
+/// Bytes that are not JSON are `M_NOT_JSON`; JSON of the wrong shape is
+/// `M_BAD_JSON`.
+#[test]
+fn unparseable_body_is_not_json_wrong_shape_is_bad_json() {
+    use ruma::api::IncomingRequestExt;
+    use ruma::api::client::session::login::v3 as login;
+
+    let cases: [(&[u8], &str); 5] = [
+        (b"not json", "M_NOT_JSON"),
+        (b"{\"type\": \"m.login.password\"", "M_NOT_JSON"),
+        (b"\xff\xfe", "M_NOT_JSON"),
+        (b"[1, 2]", "M_BAD_JSON"),
+        (b"{\"type\": 5}", "M_BAD_JSON"),
+    ];
+    for (body, errcode) in cases {
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/_matrix/client/v3/login")
+            .header("content-type", "application/json")
+            .body(body)
+            .expect("request");
+        let err =
+            login::Request::try_from_http_request(request, &[] as &[&str]).expect_err("rejected");
+        let rejection = MatrixRejection::from(err);
+        assert_eq!(rejection.errcode(), errcode, "{body:?}: {rejection:?}");
+        assert_eq!(rejection.error_kind().errcode().to_string(), errcode);
+        assert_eq!(rejection.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let syntax = serde_json::from_str::<serde_json::Value>("{").expect_err("eof");
+    assert_eq!(MatrixRejection::from(syntax).errcode(), "M_NOT_JSON");
+    let shape = serde_json::from_str::<u8>("\"x\"").expect_err("wrong type");
+    assert_eq!(MatrixRejection::from(shape).errcode(), "M_BAD_JSON");
 }

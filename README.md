@@ -11,8 +11,9 @@ response, and every failure answers with a spec-shaped Matrix error.
 
 - `Matrix<T, S>`: extractor for any ruma `IncomingRequest`. It feeds path
   parameters to ruma in template order, enforces the endpoint's
-  authentication scheme, reads the body (an over-limit body is
-  `M_TOO_LARGE`, not `M_BAD_JSON`) and calls `try_from_http_request`.
+  authentication scheme, reads the body and calls `try_from_http_request`.
+  An over-limit body is `M_TOO_LARGE`, bytes that are not JSON
+  `M_NOT_JSON`, and JSON of the wrong shape `M_BAD_JSON`.
 - `MatrixAuth`: the trait your state implements. It resolves access tokens
   to a user/device or an appservice, and optionally verifies X-Matrix
   signatures for federation endpoints.

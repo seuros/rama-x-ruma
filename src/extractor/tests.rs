@@ -196,6 +196,18 @@ async fn empty_state_key_put_with_trailing_slash_routes() {
         assert_eq!(body["state_key"], "", "{target}");
         assert_eq!(body["content"], r#"{"name":"Lobby"}"#, "{target}");
     }
+
+    // bytes that are not JSON at all
+    let request = Request::builder()
+        .method("PUT")
+        .uri("/_matrix/client/v3/rooms/!r:x/state/m.room.name/")
+        .header("authorization", "Bearer t")
+        .body(Body::from("name=Lobby"))
+        .expect("request");
+    let response = svc.serve(request).await.expect("served");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.try_into_json().await.expect("json");
+    assert_eq!(body["errcode"], "M_NOT_JSON");
 }
 
 /// Routes without a ruma type take multi-segment paths as a named struct

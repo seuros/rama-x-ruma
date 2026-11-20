@@ -115,7 +115,9 @@ pub enum MatrixRejection {
     },
     /// Failed to read request body (M_BAD_JSON)
     BodyReadError(String),
-    /// Request body is not valid JSON (M_BAD_JSON)
+    /// Request body is not JSON at all (M_NOT_JSON)
+    NotJson(String),
+    /// Request body is JSON of the wrong shape (M_BAD_JSON)
     InvalidJson(String),
     /// Failed to parse request using Ruma types (M_BAD_JSON)
     RumaParseError(String),
@@ -233,9 +235,14 @@ impl MatrixRejection {
         Self::Unrecognized(message.into())
     }
 
-    /// Create a bad JSON rejection
+    /// Create a bad JSON rejection: valid JSON of the wrong shape
     pub fn bad_json(message: impl Into<String>) -> Self {
         Self::InvalidJson(message.into())
+    }
+
+    /// Create a not-JSON rejection: a body that does not parse as JSON
+    pub fn not_json(message: impl Into<String>) -> Self {
+        Self::NotJson(message.into())
     }
 
     /// Create a rate limited rejection
@@ -256,6 +263,15 @@ impl MatrixRejection {
             }
             FromHttpRequestError::Deserialization(DeserializationError::Ident(err)) => {
                 Self::InvalidParam(format!("Invalid identifier: {err}"))
+            }
+            // unparseable bytes, as opposed to JSON of the wrong shape
+            FromHttpRequestError::Deserialization(DeserializationError::Json(err))
+                if err.is_syntax() || err.is_eof() =>
+            {
+                Self::NotJson(err.to_string())
+            }
+            FromHttpRequestError::Deserialization(DeserializationError::Utf8(err)) => {
+                Self::NotJson(err.to_string())
             }
             FromHttpRequestError::Deserialization(de_err) => {
                 let err_string = de_err.to_string();
@@ -325,6 +341,7 @@ impl MatrixRejection {
                 }
             }
             Self::BodyReadError(_) => ErrorKind::BadJson,
+            Self::NotJson(_) => ErrorKind::NotJson,
             Self::InvalidJson(_) => ErrorKind::BadJson,
             Self::RumaParseError(_) => ErrorKind::BadJson,
             Self::LimitExceeded { retry_after_ms } => {
@@ -372,6 +389,7 @@ impl MatrixRejection {
             | Self::InvalidJson(_)
             | Self::RumaParseError(_)
             | Self::ServerManaged(_) => errcode::BAD_JSON,
+            Self::NotJson(_) => errcode::NOT_JSON,
             Self::LimitExceeded { .. } => errcode::LIMIT_EXCEEDED,
             Self::TooLarge(_) | Self::RemoteTooLarge(_) => errcode::TOO_LARGE,
             Self::NotYetUploaded(_) => errcode::NOT_YET_UPLOADED,
@@ -409,6 +427,7 @@ impl MatrixRejection {
             | Self::IncompatibleRoomVersion { .. }
             | Self::UnsupportedRoomVersion(_)
             | Self::BodyReadError(_)
+            | Self::NotJson(_)
             | Self::InvalidJson(_)
             | Self::RumaParseError(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) | Self::Unrecognized(_) => StatusCode::NOT_FOUND,
@@ -449,6 +468,7 @@ impl MatrixRejection {
             }
             Self::NoPathTemplate => "No path template registered.".to_owned(),
             Self::BodyReadError(msg) => format!("Failed to read request body: {}", msg),
+            Self::NotJson(msg) => format!("Content not JSON: {msg}"),
             Self::InvalidJson(msg) => format!("Invalid JSON: {}", msg),
             Self::RumaParseError(msg) => format!("Failed to deserialize request: {}", msg),
             Self::LimitExceeded { retry_after_ms } => {
@@ -580,7 +600,11 @@ impl From<std::convert::Infallible> for MatrixRejection {
 
 impl From<serde_json::Error> for MatrixRejection {
     fn from(err: serde_json::Error) -> Self {
-        Self::InvalidJson(err.to_string())
+        if err.is_syntax() || err.is_eof() {
+            Self::NotJson(err.to_string())
+        } else {
+            Self::InvalidJson(err.to_string())
+        }
     }
 }
 
