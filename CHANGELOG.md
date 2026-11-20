@@ -19,9 +19,10 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **rejection:** a request body that does not parse as JSON (or is not
-  UTF-8) now answers `M_NOT_JSON`, as the spec requires; `M_BAD_JSON` stays
-  for JSON of the wrong shape. `From<serde_json::Error>` follows the same
+* **rejection:** a request body that does not parse as JSON, or is not
+  UTF-8 anywhere (even inside a field ruma ignores), now answers
+  `M_NOT_JSON`, as the spec requires; `M_BAD_JSON` stays for JSON of the
+  wrong shape. Raw-body endpoints such as media upload still take any bytes. `From<serde_json::Error>` follows the same
   split, and `MatrixRejection` has a `NotJson` variant.
 * **router:** `route_paths` returns two paths for a trailing state key, the
   second ending in `/?`, instead of three.

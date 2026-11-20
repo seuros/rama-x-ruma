@@ -168,8 +168,18 @@ where
         }
 
         let http_request = http_request
-            .body(body_bytes.as_ref())
+            .body(())
             .map_err(|e| MatrixRejection::request_build_error(e.to_string()))?;
+        // serde_json skips ignored strings without checking their UTF-8, so
+        // a JSON endpoint can accept a non-UTF-8 body; probe whether this
+        // endpoint takes a body that is not JSON at all (media upload)
+        let not_utf8 = std::str::from_utf8(&body_bytes).err().map(|err| {
+            let mut probe = ::http::Request::new(NOT_JSON_PROBE);
+            *probe.method_mut() = http_request.method().clone();
+            *probe.uri_mut() = http_request.uri().clone();
+            *probe.headers_mut() = http_request.headers().clone();
+            (err, probe)
+        });
 
         debug!(
             "Parsing {} request with {} path args",
@@ -178,10 +188,17 @@ where
         );
 
         let path_args: Vec<&str> = path_args.iter().map(String::as_str).collect();
-        let body = T::try_from_http_request(http_request, &path_args).map_err(|e| {
+        let request = http_request.map(|()| body_bytes.as_ref());
+        let body = T::try_from_http_request(request, &path_args).map_err(|e| {
             warn!("Failed to parse Matrix request: {:?}", e);
             MatrixRejection::from_ruma_error(e)
         })?;
+
+        if let Some((err, probe)) = not_utf8
+            && T::try_from_http_request(probe, &path_args).is_err()
+        {
+            return Err(MatrixRejection::not_json(err.to_string()));
+        }
 
         Ok(Matrix {
             body,
@@ -194,6 +211,10 @@ where
         })
     }
 }
+
+/// Not UTF-8 and not JSON: only an endpoint that never parses its body as
+/// JSON accepts it.
+const NOT_JSON_PROBE: &[u8] = b"\xff";
 
 /// Path arguments in the order ruma's `try_from_http_request` expects:
 /// the order of the placeholders in the endpoint's first path template

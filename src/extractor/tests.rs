@@ -210,6 +210,65 @@ async fn empty_state_key_put_with_trailing_slash_routes() {
     assert_eq!(body["errcode"], "M_NOT_JSON");
 }
 
+/// A JSON body is UTF-8 throughout, even inside fields ruma ignores; a
+/// raw-body endpoint takes any bytes.
+#[tokio::test]
+async fn non_utf8_json_body_is_not_json_but_raw_uploads_pass() {
+    use ruma::api::client::media::create_content::v3 as upload;
+    use ruma::api::client::profile::set_display_name::v3 as set_display_name;
+
+    async fn display_name(
+        _req: Matrix<set_display_name::Request, Alice>,
+    ) -> MatrixResult<set_display_name::Response> {
+        Ok(MatrixResponse::new(set_display_name::Response::new()))
+    }
+    async fn upload(req: Matrix<upload::Request, Alice>) -> MatrixResult<upload::Response> {
+        let uri = format!("mxc://example.org/{}", req.body.file.len());
+        Ok(MatrixResponse::new(upload::Response::new(uri.into())))
+    }
+
+    let router = Router::new()
+        .with_matrix_endpoint::<set_display_name::Request, _, _>(display_name)
+        .with_matrix_endpoint::<upload::Request, _, _>(upload);
+    let svc = StateLayer::new(std::sync::Arc::new(Alice)).into_layer(router);
+
+    let put = |body: &'static [u8]| {
+        Request::builder()
+            .method("PUT")
+            .uri("/_matrix/client/v3/profile/@alice:example.org/displayname")
+            .header("authorization", "Bearer t")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .expect("request")
+    };
+
+    let response = svc
+        .serve(put(b"{\"displayname\":\"Alice\",\"ignored\":\"\xff\"}"))
+        .await
+        .expect("served");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = response.try_into_json().await.expect("json");
+    assert_eq!(body["errcode"], "M_NOT_JSON");
+
+    let response = svc
+        .serve(put(b"{\"displayname\":\"Alice\"}"))
+        .await
+        .expect("served");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/_matrix/media/v3/upload?filename=x.bin")
+        .header("authorization", "Bearer t")
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(&b"\xff\xfe\x00\x89PNG"[..]))
+        .expect("request");
+    let response = svc.serve(request).await.expect("served");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = response.try_into_json().await.expect("json");
+    assert_eq!(body["content_uri"], "mxc://example.org/7");
+}
+
 /// Routes without a ruma type take multi-segment paths as a named struct
 /// (never a tuple, whose elements can bind out of order); a failed path
 /// extraction is a Matrix error.
