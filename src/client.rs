@@ -49,11 +49,11 @@ pub const DEFAULT_MAX_RESPONSE_BODY: usize = 64 * 1024 * 1024;
 ///
 /// ```rust,no_run
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// use rama::http::client::EasyHttpWebClient;
+/// use rama::http::client::DefaultHttpWebClient;
 /// use rama_x_ruma::client::MatrixClient;
 /// use ruma::api::client::account::whoami::v3 as whoami;
 ///
-/// let client = MatrixClient::new(EasyHttpWebClient::default(), "https://matrix.example.org")
+/// let client = MatrixClient::new(DefaultHttpWebClient::default(), "https://matrix.example.org")
 ///     .with_access_token("syt_secret");
 /// let me = client.send(whoami::Request::new()).await?;
 /// println!("{}", me.user_id);

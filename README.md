@@ -1,6 +1,7 @@
 # rama-x-ruma
 
-Serve [ruma]'s typed Matrix API endpoints on [rama] HTTP.
+Serve [ruma]'s typed Matrix API endpoints on [rama] HTTP, and send them
+through a rama HTTP client with the `client` feature.
 
 ruma describes every Matrix endpoint as types: the request (method, path
 templates, authentication scheme, how to parse it from HTTP) and the
@@ -23,6 +24,8 @@ response, and every failure answers with a spec-shaped Matrix error.
   endpoint, with the method from ruma's metadata.
 - `StateLayer`, `ExtState`, `RequireUser`: state and identity for routes
   without a ruma request type.
+- `MatrixClient` (feature `client`): send any ruma `OutgoingRequest`
+  through a rama HTTP client and get the typed response back.
 
 ## Example
 
@@ -96,6 +99,57 @@ $ curl http://127.0.0.1:8008/_matrix/client/v3/account/whoami
 The example needs rama's `http-full` feature for `HttpServer`; the crate
 itself only enables `http`, `http-hyperium` and `net`.
 
+## Client
+
+With the `client` feature, `MatrixClient` sends any ruma `OutgoingRequest`
+through a rama `Service<Request>` and parses the endpoint's typed
+`IncomingResponse`
+(`examples/whoami_client.rs`, `cargo run -p rama-x-ruma --features client --example whoami_client`):
+
+```rust,ignore
+use std::time::Duration;
+
+use rama::http::client::DefaultHttpWebClient;
+use rama_x_ruma::MatrixClient;
+use ruma::api::client::account::whoami::v3 as whoami;
+use ruma::api::client::sync::sync_events::v3 as sync;
+
+let client = MatrixClient::new(DefaultHttpWebClient::default(), "https://matrix.example.org")
+    .with_access_token(token)
+    .with_timeout(Duration::from_secs(30));
+
+// picks /v3/ or /r0/ from the homeserver's /versions
+let client = client.clone().with_supported_versions(client.fetch_supported_versions().await?);
+
+let me = client.send(whoami::Request::new()).await?;
+
+// a long poll needs more than the default timeout
+let mut request = sync::Request::new();
+request.timeout = Some(Duration::from_secs(30));
+let batch = client.send_with_timeout(request, Duration::from_secs(60)).await?;
+```
+
+- The service is generic: wrap `DefaultHttpWebClient` (or your own
+  connector stack) in rama layers for TLS, proxies, retries or tracing.
+  HTTPS needs rama's `rustls` or `boring` feature in your build.
+- The token is sent the way each endpoint's ruma auth scheme asks:
+  `with_access_token` for users, `with_appservice_token` for appservices
+  (also sent on appservice-optional endpoints such as `/login`). An
+  endpoint that needs a token the client lacks fails before sending.
+- Path versions come from `with_supported_versions`; the default is
+  Matrix 1.1 (`/v3/` paths).
+- Raw-body endpoints work as-is: `media::create_content::v3::Request`
+  uploads its bytes with the `Content-Type` you set.
+- Response bodies are read up to `with_max_response_body` (64 MiB by
+  default); `with_timeout` bounds each request, `send_with_timeout` one call.
+- Errors are `ClientError<E>`, where `E` is the endpoint's ruma error type
+  (`ruma::api::error::Error`, or `UiaaResponse` behind user-interactive
+  auth). `ClientError::Response` keeps ruma's `FromHttpResponseError`;
+  `errcode()`, `error_kind()`, `status()` and `retry_after()` (from
+  `Retry-After` or `retry_after_ms` on `M_LIMIT_EXCEEDED`) read it, and
+  `is_retryable()` says whether trying again can help (transport errors,
+  timeouts, rate limits, 5xx).
+
 ## ruma version
 
 Built against ruma 0.17. `MatrixRejection::error_kind` returns ruma's
@@ -107,6 +161,8 @@ authentication, like
 
 ## Features
 
+- `client`: `MatrixClient` and `ClientError`. Enables ruma's
+  `client-api-c` and tokio's timer; server-only builds compile neither.
 - `unstable-msc4186`: `MatrixRejection::UnknownPos` reports ruma's
   `ErrorKind::UnknownPos` (simplified sliding sync); without it the kind is
   `ErrorKind::Unknown`. The errcode is `M_UNKNOWN_POS` either way.
