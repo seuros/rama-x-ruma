@@ -1,4 +1,4 @@
-# rama × ruma: serve ruma's typed Matrix API endpoints on rama HTTP.
+# rama × ruma: serve and send ruma's typed Matrix API endpoints on rama HTTP.
 
 [package]
 name = "rama-x-ruma"
@@ -6,12 +6,16 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Abdelkader <terminale@gmail.com>"]
-description = "Serve ruma's typed Matrix API endpoints on rama: a request extractor, response conversion, Matrix errcodes, auth plumbing and endpoint routing"
+description = "Serve and send ruma's typed Matrix API endpoints on rama: a request extractor, response conversion, Matrix errcodes, auth plumbing, endpoint routing and an optional client"
 license = "BSD-3-Clause"
 repository = "https://github.com/seuros/rama-x-ruma"
 readme = "README.md"
-keywords = ["matrix", "ruma", "rama", "http", "server"]
-categories = ["network-programming", "web-programming::http-server"]
+keywords = ["matrix", "ruma", "rama", "server", "client"]
+categories = [
+    "network-programming",
+    "web-programming::http-client",
+    "web-programming::http-server",
+]
 
 [lints.rust]
 rust_2024_compatibility = { level = "warn", priority = -1 }
@@ -24,8 +28,14 @@ all = { level = "warn", priority = -1 }
 [lib]
 name = "rama_x_ruma"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
+# `MatrixClient`: send ruma `OutgoingRequest`s through any rama HTTP client
+# service and parse the typed responses.
+client = ["ruma/client-api-c", "dep:tokio"]
 # Simplified sliding sync (MSC4186): `MatrixRejection::UnknownPos` reports
 # ruma's `ErrorKind::UnknownPos` instead of `ErrorKind::Unknown`.
 unstable-msc4186 = ["ruma/unstable-msc4186"]
@@ -37,8 +47,11 @@ rama = { version = "0.4.0", features = ["http", "http-hyperium", "net"] }
 ruma = { version = "0.17.2", features = ["api", "client-api-s"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
+# client timeouts; rama already runs on tokio
+tokio = { version = "1.42", features = ["time"], optional = true }
 
 [dev-dependencies]
 rama = { version = "0.4.0", features = ["http-full"] }
 ruma = { version = "0.17.2", features = ["federation-api-s"] }
 tokio = { version = "1.42", features = ["full"] }
+

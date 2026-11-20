@@ -2,7 +2,8 @@
 // Copyright (c) 2025, Abdelkader Boudih
 // See the LICENSE file at the root of this crate for the full license text.
 
-//! Serve [ruma]'s typed Matrix API endpoints on [rama] HTTP.
+//! Serve [ruma]'s typed Matrix API endpoints on [rama] HTTP, and, with the
+//! `client` feature, send them through a rama HTTP client.
 //!
 //! ruma describes every Matrix endpoint as a request type (path templates,
 //! method, authentication scheme, how to parse it from HTTP) and a response
@@ -31,6 +32,9 @@
 //! - [`MatrixRouterExt`]: register handlers from ruma endpoint metadata.
 //! - [`StateLayer`], [`ExtState`], [`RequireUser`]: state and identity for
 //!   routes without a ruma request type.
+//! - `client::MatrixClient` (feature `client`): send any ruma
+//!   `OutgoingRequest` through a rama `Service<Request>` and get the typed
+//!   response, or a `client::ClientError` carrying ruma's Matrix error.
 //!
 //! # Example
 //!
@@ -63,6 +67,8 @@
 //! ```
 
 pub mod auth;
+#[cfg(feature = "client")]
+pub mod client;
 pub mod errcode;
 pub mod ext_state;
 pub mod extractor;
@@ -76,6 +82,8 @@ pub mod state_layer;
 pub use auth::{
     AuthContext, AuthScheme, MatrixAuth, TokenIdentity, extract_access_token, handle_auth, identify,
 };
+#[cfg(feature = "client")]
+pub use client::{ClientError, Credentials, MatrixClient};
 pub use ext_state::{ExtState, ExtStateMissing};
 pub use extractor::{Matrix, body_rejection};
 pub use rejection::MatrixRejection;
