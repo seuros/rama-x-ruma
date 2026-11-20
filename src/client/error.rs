@@ -36,14 +36,31 @@ pub enum ClientError<E = MatrixError> {
         limit: usize,
     },
     /// The homeserver answered with an error, or a body ruma could not parse.
-    Response(FromHttpResponseError<E>),
+    Response {
+        /// The answer's HTTP status.
+        status: http::StatusCode,
+        /// ruma's reading of the answer.
+        error: FromHttpResponseError<E>,
+    },
 }
 
 impl<E> ClientError<E> {
     /// The homeserver's error, if it answered with one.
     pub fn server_error(&self) -> Option<&E> {
         match self {
-            Self::Response(FromHttpResponseError::Server(error)) => Some(error),
+            Self::Response {
+                error: FromHttpResponseError::Server(error),
+                ..
+            } => Some(error),
+            _ => None,
+        }
+    }
+
+    /// The HTTP status of the homeserver's answer, UIA challenges and
+    /// unparseable bodies included.
+    pub fn status(&self) -> Option<http::StatusCode> {
+        match self {
+            Self::Response { status, .. } => Some(*status),
             _ => None,
         }
     }
@@ -63,11 +80,6 @@ impl<E: MatrixErrorBody> ClientError<E> {
     /// The Matrix `errcode` (`M_FORBIDDEN`, `M_LIMIT_EXCEEDED`, ...).
     pub fn errcode(&self) -> Option<ErrorCode> {
         self.error_kind().map(ErrorKind::errcode)
-    }
-
-    /// The HTTP status of an error response.
-    pub fn status(&self) -> Option<http::StatusCode> {
-        self.matrix_error().map(|error| error.status_code)
     }
 
     /// How long a rate-limited (`M_LIMIT_EXCEEDED`) request should wait,
@@ -92,11 +104,13 @@ impl<E: MatrixErrorBody> ClientError<E> {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Transport(_) | Self::Timeout(_) => true,
-            Self::Response(FromHttpResponseError::Server(error)) => {
-                error.matrix_error().is_some_and(|error| {
-                    error.status_code.is_server_error()
-                        || matches!(error.error_kind(), Some(ErrorKind::LimitExceeded(_)))
-                })
+            Self::Response {
+                status,
+                error: FromHttpResponseError::Server(_),
+            } => {
+                status.is_server_error()
+                    || *status == http::StatusCode::TOO_MANY_REQUESTS
+                    || matches!(self.error_kind(), Some(ErrorKind::LimitExceeded(_)))
             }
             _ => false,
         }
@@ -111,7 +125,7 @@ impl<E: fmt::Display> fmt::Display for ClientError<E> {
             Self::Transport(error) => write!(f, "homeserver unreachable: {error}"),
             Self::Timeout(limit) => write!(f, "no response within {limit:?}"),
             Self::BodyTooLarge { limit } => write!(f, "response body over {limit} bytes"),
-            Self::Response(error) => error.fmt(f),
+            Self::Response { error, .. } => error.fmt(f),
         }
     }
 }
@@ -121,7 +135,7 @@ impl<E: StdError + 'static> StdError for ClientError<E> {
         match self {
             Self::IntoHttp(error) => Some(error),
             Self::Convert(error) | Self::Transport(error) => Some(&**error),
-            Self::Response(error) => Some(error),
+            Self::Response { error, .. } => Some(error),
             Self::Timeout(_) | Self::BodyTooLarge { .. } => None,
         }
     }

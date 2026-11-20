@@ -145,8 +145,9 @@ let batch = client.send_with_timeout(request, Duration::from_secs(60)).await?;
   default); `with_timeout` bounds each request, `send_with_timeout` one call.
 - Errors are `ClientError<E>`, where `E` is the endpoint's ruma error type
   (`ruma::api::error::Error`, or `UiaaResponse` behind user-interactive
-  auth). `ClientError::Response` keeps ruma's `FromHttpResponseError`;
-  `errcode()`, `error_kind()`, `status()` and `retry_after()` (from
+  auth). `ClientError::Response { status, error }` keeps the answer's HTTP
+  status (UIA challenges included) and ruma's `FromHttpResponseError`;
+  `status()`, `errcode()`, `error_kind()` and `retry_after()` (from
   `Retry-After` or `retry_after_ms` on `M_LIMIT_EXCEEDED`) read it, and
   `is_retryable()` says whether trying again can help (transport errors,
   timeouts, rate limits, 5xx).

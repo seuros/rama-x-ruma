@@ -18,9 +18,10 @@ fn server_error(status: u16, headers: &[(&str, &str)], body: &str) -> ClientErro
         builder = builder.header(*name, *value);
     }
     let response = builder.body(body.as_bytes()).expect("valid response");
-    ClientError::Response(FromHttpResponseError::Server(
-        RumaError::from_http_response(response),
-    ))
+    ClientError::Response {
+        status: response.status(),
+        error: FromHttpResponseError::Server(RumaError::from_http_response(response)),
+    }
 }
 
 /// MOCKED: answers every request with one canned response and records
@@ -171,12 +172,57 @@ fn server_errors_and_timeouts_are_retryable() {
     assert!(!ClientError::<RumaError>::BodyTooLarge { limit: 1 }.is_retryable());
 }
 
+#[tokio::test]
+async fn uiaa_challenge_keeps_its_status() {
+    use ruma::api::client::account::deactivate::v3 as deactivate;
+
+    let service = Canned::new(
+        StatusCode::UNAUTHORIZED,
+        r#"{"flows":[{"stages":["m.login.password"]}],"params":{},"session":"s1"}"#,
+    );
+    let client = MatrixClient::new(service, "https://hs").with_access_token("tok");
+    let error = client
+        .send(deactivate::Request::new())
+        .await
+        .expect_err("challenged");
+    assert!(
+        matches!(error.server_error(), Some(UiaaResponse::AuthResponse(info)) if info.session.as_deref() == Some("s1")),
+        "{error:?}"
+    );
+    assert!(error.matrix_error().is_none());
+    assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+    assert!(!error.is_retryable());
+}
+
 #[test]
 fn uiaa_auth_response_has_no_matrix_error() {
-    let error: ClientError<UiaaResponse> = ClientError::Response(FromHttpResponseError::Server(
-        UiaaResponse::AuthResponse(UiaaInfo::new(Vec::new())),
-    ));
+    let error: ClientError<UiaaResponse> = ClientError::Response {
+        status: StatusCode::UNAUTHORIZED,
+        error: FromHttpResponseError::Server(UiaaResponse::AuthResponse(UiaaInfo::new(Vec::new()))),
+    };
     assert!(error.server_error().is_some());
     assert!(error.matrix_error().is_none());
+    assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+}
+
+#[tokio::test]
+async fn unparseable_success_keeps_its_status() {
+    let client = MatrixClient::new(Canned::new(StatusCode::OK, "not json"), "https://hs")
+        .with_access_token("tok");
+    let error = client
+        .send(whoami::Request::new())
+        .await
+        .expect_err("bad body");
+    assert!(
+        matches!(
+            error,
+            ClientError::Response {
+                error: FromHttpResponseError::Deserialization(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.status(), Some(StatusCode::OK));
     assert!(!error.is_retryable());
 }
